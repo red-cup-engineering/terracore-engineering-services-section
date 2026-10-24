@@ -1,11 +1,11 @@
 {
-  "name": "@red-cup-engineering/terracore-services-section",
+  "name": "@red-cup-engineering/terracore-engineering-services-section",
   "version": "0.1.1",
   "type": "module",
   "description": "TerraCore player-state observation with exact SCRAP/mine-rate lexeme preservation, scrap-claim and Engineering-upgrade planning, and conservative PvE battle-target selection. Produces unsigned custom_json intents only.",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/red-cup-engineering/terracore-services-section.git"
+    "url": "git+https://github.com/red-cup-engineering/terracore-engineering-services-section.git"
   },
   "engines": {
     "node": ">=22.18"
