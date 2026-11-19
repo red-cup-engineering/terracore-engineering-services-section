@@ -186,18 +186,18 @@ export function createTerraCoreClient(options = {}) {
   const now = options.now ?? (() => new Date());
   return Object.freeze({
     async readPlayer(account) {
-      const admittedAccount = accountName(account);
-      const response = await fetchImpl(`${endpoint}/player/${encodeURIComponent(admittedAccount)}`, { headers: { accept: "application/json" } });
+      const validatedAccount = accountName(account);
+      const response = await fetchImpl(`${endpoint}/player/${encodeURIComponent(validatedAccount)}`, { headers: { accept: "application/json" } });
       if (!response.ok) throw new Error(`TerraCore player read failed (${response.status})`);
       const state = parseTerraCorePlayer(await response.text(), now().toISOString());
-      if (state.account !== admittedAccount) throw new Error(`TerraCore returned ${state.account} for ${admittedAccount}`);
+      if (state.account !== validatedAccount) throw new Error(`TerraCore returned ${state.account} for ${validatedAccount}`);
       return state;
     },
   });
 }
 
 export function terraCoreClaimIntent(account, amount) {
-  const admittedAccount = accountName(account);
+  const validatedAccount = accountName(account);
   const normalized = decimalAtScale(amount, 8, "claim amount");
   if (decimalUnits(normalized, 8, "claim amount") === 0n) throw new Error("TerraCore claim amount must be positive at 8-decimal precision");
   return Object.freeze({
@@ -205,7 +205,7 @@ export function terraCoreClaimIntent(account, amount) {
     approvedForBroadcast: false,
     operation: Object.freeze(["custom_json", Object.freeze({
       required_auths: Object.freeze([]),
-      required_posting_auths: Object.freeze([admittedAccount]),
+      required_posting_auths: Object.freeze([validatedAccount]),
       id: "terracore_claim",
       json: JSON.stringify({ amount: normalized }),
     })]),
@@ -213,17 +213,17 @@ export function terraCoreClaimIntent(account, amount) {
 }
 
 export function terraCoreBattleIntent(account, target) {
-  const admittedAccount = accountName(account);
-  const admittedTarget = accountName(target, "battle target");
-  if (admittedAccount === admittedTarget) throw new Error("TerraCore battle target must differ from actor");
+  const validatedAccount = accountName(account);
+  const validatedTarget = accountName(target, "battle target");
+  if (validatedAccount === validatedTarget) throw new Error("TerraCore battle target must differ from actor");
   return Object.freeze({
     role: "posting",
     approvedForBroadcast: false,
     operation: Object.freeze(["custom_json", Object.freeze({
       required_auths: Object.freeze([]),
-      required_posting_auths: Object.freeze([admittedAccount]),
+      required_posting_auths: Object.freeze([validatedAccount]),
       id: "terracore_battle",
-      json: JSON.stringify({ target: admittedTarget }),
+      json: JSON.stringify({ target: validatedTarget }),
     })]),
   });
 }
@@ -337,21 +337,21 @@ export function planTerraCoreActions(state, minimumClaimScrap = "10.00000000") {
   const observed = decimalAtScale(state.scrap, 8, "observed scrap");
   const minimum = decimalAtScale(minimumClaimScrap, 8, "minimum claim");
   const actions = [];
-  const refusals = [];
+  const rejections = [];
   if (decimalUnits(observed, 8, "observed scrap") >= decimalUnits(minimum, 8, "minimum claim") && decimalUnits(observed, 8, "observed scrap") > 0n) {
     const intent = terraCoreClaimIntent(state.account, observed);
     actions.push(Object.freeze({ ...intent, kind: "claim-scrap", account: state.account, amount: observed, observedScrap: state.scrap, reason: "move accumulated SCRAP out of the raid-exposed in-game stash" }));
   } else {
-    refusals.push(Object.freeze({ action: "claim-scrap", reason: `observed stash ${observed} is below policy minimum ${minimum}` }));
+    rejections.push(Object.freeze({ action: "claim-scrap", reason: `observed stash ${observed} is below policy minimum ${minimum}` }));
   }
   if (state.attacks > 0) {
-    refusals.push(Object.freeze({ action: "battle", reason: "no snapshot-consistent target-selection and expected-value evidence was supplied" }));
+    rejections.push(Object.freeze({ action: "battle", reason: "no snapshot-consistent target-selection and expected-value evidence was supplied" }));
   }
-  return Object.freeze({ account: state.account, observedAt: state.observedAt, actions: Object.freeze(actions), refusals: Object.freeze(refusals), locked: true });
+  return Object.freeze({ account: state.account, observedAt: state.observedAt, actions: Object.freeze(actions), refusals: Object.freeze(rejections), locked: true });
 }
 
 export function terraCoreEngineeringUpgradeIntent(account, costScrap, actionNonce) {
-  const admittedAccount = accountName(account);
+  const validatedAccount = accountName(account);
   const cost = decimalAtScale(costScrap, 8, "engineering upgrade cost");
   if (decimalUnits(cost, 8, "engineering upgrade cost") <= 0n) throw new Error("TerraCore engineering upgrade cost must be positive");
   if (!/^[0-9a-f]{16}$/.test(actionNonce)) throw new Error("TerraCore engineering action nonce must be 16 lowercase hexadecimal characters");
@@ -359,7 +359,7 @@ export function terraCoreEngineeringUpgradeIntent(account, costScrap, actionNonc
     role: "active",
     approvedForBroadcast: false,
     operation: Object.freeze(["custom_json", Object.freeze({
-      required_auths: Object.freeze([admittedAccount]),
+      required_auths: Object.freeze([validatedAccount]),
       required_posting_auths: Object.freeze([]),
       id: "ssc-mainnet-hive",
       json: JSON.stringify({
@@ -371,7 +371,7 @@ export function terraCoreEngineeringUpgradeIntent(account, costScrap, actionNonc
   });
 }
 
-export function planTerraCoreEngineeringUpgrade(state, minimumRetainedScrap = "50.00000000", maximumPaybackMilliDays = 7_000) {
+export function planTerraCoreEngineeringUpgrade(state, minimumKeptScrap = "50.00000000", maximumPaybackMilliDays = 7_000) {
   try {
     if (state.scrapPrecision !== 8) throw new Error("SCRAP precision changed");
     if (!Number.isSafeInteger(maximumPaybackMilliDays) || maximumPaybackMilliDays < 1) throw new Error("invalid engineering payback policy");
@@ -379,9 +379,9 @@ export function planTerraCoreEngineeringUpgrade(state, minimumRetainedScrap = "5
     if (level !== 14) throw new Error(`bounded first upgrade requires base Engineering 14, observed ${level}`);
     const costUnits = BigInt(level * level) * 100_000_000n;
     const liquidUnits = decimalUnits(state.liquidScrap, 8, "liquid SCRAP");
-    const retainedUnits = liquidUnits - costUnits;
-    const reserveUnits = decimalUnits(minimumRetainedScrap, 8, "minimum retained SCRAP");
-    if (retainedUnits < reserveUnits) throw new Error("engineering upgrade would breach the liquid SCRAP reserve");
+    const keptUnits = liquidUnits - costUnits;
+    const reserveUnits = decimalUnits(minimumKeptScrap, 8, "minimum retained SCRAP");
+    if (keptUnits < reserveUnits) throw new Error("engineering upgrade would breach the liquid SCRAP reserve");
     const currentDaily = dailyUnits8(state.player.mineRate);
     const nextLevel = level + 1;
     // Production client getMinerate: (engineering + 1)^2 / 172800
@@ -399,7 +399,7 @@ export function planTerraCoreEngineeringUpgrade(state, minimumRetainedScrap = "5
         fromLevel: level,
         toLevel: nextLevel,
         costScrap: formatUnits(costUnits, 8),
-        retainedLiquidScrap: formatUnits(retainedUnits, 8),
+        retainedLiquidScrap: formatUnits(keptUnits, 8),
         currentScrapPerDay: formatUnits(currentDaily, 8),
         expectedScrapPerDay: formatUnits(expectedDaily, 8),
         incrementalScrapPerDay: formatUnits(incrementalDaily, 8),
